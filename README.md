@@ -13,9 +13,6 @@ This repository contains a FastAPI application that deploys two trained Ultralyt
   - [Available Endpoints](#available-endpoints)
 - [API Endpoints Details](#api-endpoints-details)
 - [Next Steps for the Assignment](#next-steps-for-the-assignment)
-- [Monitoring & Dashboard Development](#monitoring--dashboard-development)
-- [Report and Deliverables](#report-and-deliverables)
-- [License](#license)
 
 ## Overview
 
