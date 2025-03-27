@@ -73,8 +73,8 @@ def list_models():
 @app.get("/group-info")
 def group_info():
     return {
-        "group": "group3",
-        "members": ["Alice", "Bob", "Charlie"]
+        "group": "Group 2",
+        "members": ["Fuad Hasan", "Junfeng Lei", "Zhibo Wang", "Tony Zhao"]
     }
 
 # Model Info Endpoint (Describe a Model)
