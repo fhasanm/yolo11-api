@@ -1,9 +1,18 @@
 from fastapi import FastAPI, File, UploadFile, Query
 from fastapi.responses import JSONResponse
 from ultralytics import YOLO
+from fastapi.responses import StreamingResponse
+from ultralytics.utils.plotting import Annotator, colors
+from PIL import Image
 import numpy as np
+import pandas as pd
 import cv2
+import io
 import time
+
+from evidently.report import Report
+from evidently.metric_preset import DataDriftPreset, ClassificationPreset
+from evidently.metrics import ColumnDriftMetric, ColumnSummaryMetric
 
 app = FastAPI(
     title="YOLO11 Deployment API",
@@ -48,6 +57,42 @@ def process_image(image_bytes: bytes) -> np.ndarray:
     np_arr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     return img
+
+def add_bboxs_on_img(image: Image, predict) -> Image:
+    
+    annotator = Annotator(np.array(image))
+
+    # sort predict by xmin value
+    predict = predict.sort_values(by=['xmin'], ascending=True)
+
+    # iterate over the rows of predict dataframe
+    for i, row in predict.iterrows():
+        # create the text to be displayed on image
+        text = f"{row['name']}: {int(row['confidence']*100)}%"
+        # get the bounding box coordinates
+        bbox = [row['xmin'], row['ymin'], row['xmax'], row['ymax']]
+        # add the bounding box and text on the image
+        annotator.box_label(bbox, text, color=colors(row['class'], True))
+    # convert the annotated image to PIL image
+    return Image.fromarray(annotator.result())
+
+def get_bytes_from_image(image: Image) -> bytes:
+    return_image = io.BytesIO()
+    image.save(return_image, format='JPEG', quality=85)  # save the image in JPEG format with quality 85
+    return_image.seek(0)  # set the pointer to the beginning of the file
+    return return_image
+
+def transform_predict_to_df(results: list, labeles_dict: dict) -> pd.DataFrame:
+    
+    # Transform the Tensor to numpy array
+    predict_bbox = pd.DataFrame(results[0].to("cpu").numpy().boxes.xyxy, columns=['xmin', 'ymin', 'xmax','ymax'])
+    # Add the confidence of the prediction to the DataFrame
+    predict_bbox['confidence'] = results[0].to("cpu").numpy().boxes.conf
+    # Add the class of the prediction to the DataFrame
+    predict_bbox['class'] = (results[0].to("cpu").numpy().boxes.cls).astype(int)
+    # Replace the class number with the class name from the labeles_dict
+    predict_bbox['name'] = predict_bbox["class"].replace(labeles_dict)
+    return predict_bbox
 
 # -------------------------
 # 3. API Endpoints
@@ -162,6 +207,44 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
         "predictions": predictions,
         "model_used": chosen_model_name
     }
+    
+@app.post("/predict_visualization")
+def predict_visualization(image: UploadFile = File(...), model: str = Query(None, description="YOLO model name to use")):
+    """
+    Object Detection from an image plot bbox on image
+
+    Args:
+        file (bytes): The image file in bytes format.
+    Returns:
+        Image: Image in bytes with bbox annotations.
+    """
+    global request_count, total_latency, max_latency
+
+    start_request_time = time.time()
+    request_timestamps.append(start_request_time)
+    
+    # Choose model
+    if model and model in models:
+        chosen_model = models[model]
+        chosen_model_name = model
+    else:
+        chosen_model = models[default_model_name]
+        chosen_model_name = default_model_name
+
+    # Read image file from request
+    contents = image.file.read()
+    img = process_image(contents)
+    
+    # Run inference using Ultralytics YOLO11 predict mode
+    # Here, stream=False returns a list of Results objects
+    results = chosen_model.predict(img, conf=0.25, imgsz=640)
+    results = transform_predict_to_df(results, chosen_model.model.names)
+
+    # add bbox on image
+    final_image = add_bboxs_on_img(image = img, predict = results)
+
+    # return image in bytes format
+    return StreamingResponse(content=get_bytes_from_image(final_image), media_type="image/jpeg")
 
 # Metrics Endpoint
 @app.get("/metrics")
@@ -186,4 +269,4 @@ def get_metrics():
 # -------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
