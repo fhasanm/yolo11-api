@@ -167,6 +167,6 @@ You can test these endpoints interactively by navigating to [http://127.0.0.1:80
    - **Custom Dashboards:** Develop custom dashboards to visualize model confidence distributions and inference accuracy, potentially using tools such as Apache Airflow for scheduled drift evaluations.
 
 2. **Evaluation Script Integration:**
-   - Ensure that our API endpoints are compliant with the provided evaluation script. Run the evaluation script on the same machine as your API and include the generated report in your submission.
+   - Ensure that our API endpoints are compliant with the provided evaluation script. Run the evaluation script on the same machine as our API and include the generated report in our submission.
 
 
