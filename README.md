@@ -1,7 +1,7 @@
 
 # YOLO11 Deployment API
 
-This repository contains a FastAPI application that deploys two trained Ultralytics YOLO11 models as a RESTful API. The API is designed to accept images in various formats, dynamically handle different image sizes, and return standardized JSON detection results. This project is part of an assignment that requires deploying your trained models and setting up a monitoring and dashboard system.
+This repository contains a FastAPI application that deploys two trained Ultralytics YOLO11 models as a RESTful API. 
 
 ## Table of Contents
 
@@ -19,7 +19,7 @@ This repository contains a FastAPI application that deploys two trained Ultralyt
 
 ## Overview
 
-This project demonstrates how to deploy multiple YOLO11 models using FastAPI. The RESTful API allows clients to send images (JPEG, PNG, etc.) and receive object detection predictions. The project is structured to meet the assignment requirements which include:
+This project demonstrates how to deploy multiple YOLO11 models using FastAPI. The RESTful API allows clients to send images (JPEG, PNG, etc.) and receive object detection predictions:
 - Packaging at least two trained models.
 - Providing endpoints for inference, health checks, model management, group information, and performance metrics.
 - Implementing basic performance monitoring.
@@ -44,7 +44,7 @@ This project demonstrates how to deploy multiple YOLO11 models using FastAPI. Th
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/yourusername/yolo_api.git
+   git clone https://github.com/fhasanm/yolo_api.git
    cd yolo_api
    ```
 
