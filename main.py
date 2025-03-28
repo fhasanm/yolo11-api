@@ -10,9 +10,15 @@ import cv2
 import io
 import time
 
-from evidently.report import Report
-from evidently.metric_preset import DataDriftPreset, ClassificationPreset
-from evidently.metrics import ColumnDriftMetric, ColumnSummaryMetric
+from prometheus_client import start_http_server, Gauge, Counter, Histogram
+
+# 定义 Prometheus 指标
+time_gauge = Gauge('response_time', 'Average response time of the PyTorch model')
+request_number = Counter('request_number', 'The number of predict requests')
+confidence_distribution = Histogram('confidence_distribution', 'Confidence distribution of predictions.', buckets=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+# confidence_gauge = Gauge('confidence', 'Training accuracy of the PyTorch model')
+
+start_http_server(8000)
 
 app = FastAPI(
     title="YOLO11 Deployment API",
@@ -202,6 +208,10 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
     total_latency += elapsed
     if elapsed > max_latency:
         max_latency = elapsed
+
+    time_gauge.set(total_latency/request_count)
+    request_number.inc()
+    confidence_distribution.observe(predictions[0]["confidence"])
 
     return {
         "predictions": predictions,
