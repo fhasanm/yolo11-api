@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Query
+from fastapi import FastAPI, File, UploadFile, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
 from ultralytics import YOLO
 from fastapi.responses import StreamingResponse
@@ -10,6 +10,8 @@ import cv2
 import io
 import os
 import time
+import pandas as pd
+import os
 
 from prometheus_client import start_http_server, Gauge, Counter, Histogram
 
@@ -53,6 +55,9 @@ correct_predictions = 0
 total_latency = 0.0
 max_latency = 0.0
 request_timestamps = []  # list to track request times for request rate calculation
+
+# Evidently AI
+prod_pred_path = "output/production_predictions.csv"
 
 # -------------------------
 # 2. Helper Functions
@@ -176,9 +181,25 @@ def set_default_model(model: str):
         "default_model": default_model_name
     }
 
+# Function to log predictions in the background
+def log_predictions_bg(timestamp: float, model_name: str, predictions: list):
+    # Create a DataFrame for each detection
+    df = pd.DataFrame(
+        [
+            {"timestamp": timestamp, "model_name": model_name, "class": pred["label"], "confidence": pred["confidence"]}
+            for pred in predictions
+        ]
+    )
+
+    df.to_csv(prod_pred_path, mode="a", header=not os.path.exists(prod_pred_path), index=False)
+
 # Inference Endpoint (/predict)
 @app.post("/predict")
-def predict(image: UploadFile = File(...), model: str = Query(None, description="YOLO model name to use")):
+def predict(
+    background_tasks: BackgroundTasks,
+    image: UploadFile = File(...),
+    model: str = Query(None, description="YOLO model name to use")
+):
     global request_count, total_latency, max_latency
     global total_images, total_labeled_images, correct_predictions
 
@@ -232,6 +253,9 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
                 "confidence": round(conf, 2),
                 "bbox": [x1, y1, x2, y2]
             })
+
+    # Log predictions asynchronously
+    background_tasks.add_task(log_predictions_bg, time.time(), chosen_model_name, predictions)
 
     elapsed = time.time() - start_request_time
     request_count += 1
