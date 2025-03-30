@@ -71,7 +71,7 @@ def process_image(image_bytes: bytes) -> np.ndarray:
     return img
 
 def add_bboxs_on_img(image: Image, predict) -> Image:
-    
+
     annotator = Annotator(np.array(image))
 
     # sort predict by xmin value
@@ -95,7 +95,7 @@ def get_bytes_from_image(image: Image) -> bytes:
     return return_image
 
 def transform_predict_to_df(results: list, labeles_dict: dict) -> pd.DataFrame:
-    
+
     # Transform the Tensor to numpy array
     predict_bbox = pd.DataFrame(results[0].to("cpu").numpy().boxes.xyxy, columns=['xmin', 'ymin', 'xmax','ymax'])
     # Add the confidence of the prediction to the DataFrame
@@ -181,10 +181,10 @@ def set_default_model(model: str):
 def predict(image: UploadFile = File(...), model: str = Query(None, description="YOLO model name to use")):
     global request_count, total_latency, max_latency
     global total_images, total_labeled_images, correct_predictions
-    
+
     start_request_time = time.time()
     request_timestamps.append(start_request_time)
-    
+
     # Choose model
     if model and model in models:
         chosen_model = models[model]
@@ -196,11 +196,11 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
     # Read image file from request
     contents = image.file.read()
     img = process_image(contents)
-    
+
     # Run inference using Ultralytics YOLO11 predict mode
     # Here, stream=False returns a list of Results objects
     results = chosen_model.predict(img, conf=0.25, imgsz=640)
-    
+
     predictions = []
     # Loop through results (for each image; typically one image per request)
     for r in results:
@@ -220,13 +220,13 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
             conf = float(box.conf[0])
             cls_id = int(box.cls[0])
             label = chosen_model.names[cls_id]
-            
+
             if os.path.exists(label_path+gt_name) and (len(gt) > i):
                 total_labeled_images += 1
-                
+
                 if int(gt[i]) == 1 - cls_id:
                     correct_predictions += 1
-            
+
             predictions.append({
                 "label": label,
                 "confidence": round(conf, 2),
@@ -252,7 +252,7 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
         "predictions": predictions,
         "model_used": chosen_model_name
     }
-    
+
 @app.post("/predict_visualization")
 def predict_visualization(image: UploadFile = File(...), model: str = Query(None, description="YOLO model name to use")):
     """
@@ -267,7 +267,7 @@ def predict_visualization(image: UploadFile = File(...), model: str = Query(None
 
     start_request_time = time.time()
     request_timestamps.append(start_request_time)
-    
+
     # Choose model
     if model and model in models:
         chosen_model = models[model]
@@ -279,7 +279,7 @@ def predict_visualization(image: UploadFile = File(...), model: str = Query(None
     # Read image file from request
     contents = image.file.read()
     img = process_image(contents)
-    
+
     # Run inference using Ultralytics YOLO11 predict mode
     # Here, stream=False returns a list of Results objects
     results = chosen_model.predict(img, conf=0.25, imgsz=640)
