@@ -182,7 +182,6 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
     global request_count, total_latency, max_latency
     global total_images, total_labeled_images, correct_predictions
     
-
     start_request_time = time.time()
     request_timestamps.append(start_request_time)
     
@@ -222,7 +221,7 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
             cls_id = int(box.cls[0])
             label = chosen_model.names[cls_id]
             
-            if os.path.exists(label_path+gt_name):
+            if os.path.exists(label_path+gt_name) and (len(gt) > i):
                 total_labeled_images += 1
                 
                 if int(gt[i]) == 1 - cls_id:
@@ -246,7 +245,8 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
     else:
         accuracy.set(correct_predictions/total_labeled_images)
     request_number.inc()
-    confidence_distribution.observe(predictions[0]["confidence"])
+    if len(predictions) >= 1:
+        confidence_distribution.observe(predictions[0]["confidence"])
 
     return {
         "predictions": predictions,
