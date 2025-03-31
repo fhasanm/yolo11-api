@@ -12,6 +12,10 @@ import os
 import time
 import pandas as pd
 import os
+from evidently.report import Report
+from evidently.metric_preset import DataDriftPreset
+import webbrowser
+
 
 from prometheus_client import start_http_server, Gauge, Counter, Histogram
 
@@ -332,6 +336,39 @@ def get_metrics():
         "max_latency_ms": round(max_latency_ms, 2),
         "total_requests": request_count
     }
+
+@app.get("/monitoring/drift")
+def generate_drift_report():
+    # Load reference and production data
+    try:
+        ref_df = pd.read_csv("data/reference_predictions_0.csv")
+        current_df = pd.read_csv("output/production_predictions_0.csv")
+    except FileNotFoundError:
+        return JSONResponse(status_code=404, content={"error": "Prediction files not found."})
+
+    # Filter for a specific model (e.g., model_0)
+    ref_df = ref_df[ref_df["model_name"] == "model_0"]
+    current_df = current_df[current_df["model_name"] == "model_0"]
+
+    # Filter production data for the last 7 days
+    seven_days_ago = time.time() - 7 * 86400  # 7 days in seconds
+    current_df = current_df[current_df["timestamp"] >= seven_days_ago]
+
+    # Check if there's enough data
+    if current_df.empty:
+        return JSONResponse(status_code=400, content={"error": "No recent predictions available."})
+
+    # Generate Evidently AI report
+    report = Report(metrics=[DataDriftPreset(columns=["class", "confidence"])])
+    report.run(reference_data=ref_df, current_data=current_df)
+
+    # Save the report as HTML
+    report_path = "output/drift_report.html"
+    report.save_html(report_path)
+
+    webbrowser.open("file://" + os.path.abspath(report_path))
+
+    return JSONResponse(status_code=200, content={"message": "Drift report generated and opened in browser."})
 
 # -------------------------
 # 4. Run the Application
