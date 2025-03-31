@@ -8,15 +8,17 @@ import numpy as np
 import pandas as pd
 import cv2
 import io
+import os
 import time
 
 from prometheus_client import start_http_server, Gauge, Counter, Histogram
 
-# 定义 Prometheus 指标
 time_gauge = Gauge('response_time', 'Average response time of the PyTorch model')
 request_number = Counter('request_number', 'The number of predict requests')
 confidence_distribution = Histogram('confidence_distribution', 'Confidence distribution of predictions.', buckets=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-# confidence_gauge = Gauge('confidence', 'Training accuracy of the PyTorch model')
+accuracy = Gauge('prediction_accuracy', 'Accuracy on Labeled Data')
+
+label_path = '/home/zhibo/Code/yolo11-api-zb/data/train/labels/'
 
 start_http_server(8000)
 
@@ -44,6 +46,10 @@ start_time = time.time()
 
 # Variables for simple metrics tracking
 request_count = 0
+total_images = 0
+total_labeled_images = 0
+correct_predictions = 0
+
 total_latency = 0.0
 max_latency = 0.0
 request_timestamps = []  # list to track request times for request rate calculation
@@ -103,6 +109,13 @@ def transform_predict_to_df(results: list, labeles_dict: dict) -> pd.DataFrame:
 # -------------------------
 # 3. API Endpoints
 # -------------------------
+
+# Welcome Endpoint
+@app.get("/")
+def hello_world():
+    return {
+        "Hello World!"
+    }
 
 # Health Check Endpoint
 @app.get("/health-status")
@@ -167,6 +180,8 @@ def set_default_model(model: str):
 @app.post("/predict")
 def predict(image: UploadFile = File(...), model: str = Query(None, description="YOLO model name to use")):
     global request_count, total_latency, max_latency
+    global total_images, total_labeled_images, correct_predictions
+    
 
     start_request_time = time.time()
     request_timestamps.append(start_request_time)
@@ -190,13 +205,29 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
     predictions = []
     # Loop through results (for each image; typically one image per request)
     for r in results:
+        total_images += 1
+        gt_name = '.'.join(image.filename.split('.')[:-1])+'.txt'
+
+        if os.path.exists(label_path+gt_name):
+            gt = []
+            with open(label_path+gt_name) as f:
+                lines = f.readlines()
+                for line in lines:
+                    gt.append(line[0])
         # Each result contains a Boxes object
-        for box in r.boxes:
+        for i, box in enumerate(r.boxes):
             # Extract box coordinates in xyxy format, confidence, and class index
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             conf = float(box.conf[0])
             cls_id = int(box.cls[0])
             label = chosen_model.names[cls_id]
+            
+            if os.path.exists(label_path+gt_name):
+                total_labeled_images += 1
+                
+                if int(gt[i]) == 1 - cls_id:
+                    correct_predictions += 1
+            
             predictions.append({
                 "label": label,
                 "confidence": round(conf, 2),
@@ -209,7 +240,11 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
     if elapsed > max_latency:
         max_latency = elapsed
 
-    time_gauge.set(total_latency/request_count)
+    time_gauge.set(total_latency/total_images)
+    if total_labeled_images == 0:
+        accuracy.set(0)
+    else:
+        accuracy.set(correct_predictions/total_labeled_images)
     request_number.inc()
     confidence_distribution.observe(predictions[0]["confidence"])
 
@@ -279,4 +314,4 @@ def get_metrics():
 # -------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="129.97.250.130", port=8001)
