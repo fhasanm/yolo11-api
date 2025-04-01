@@ -1,9 +1,26 @@
 from fastapi import FastAPI, File, UploadFile, Query
 from fastapi.responses import JSONResponse
 from ultralytics import YOLO
+from fastapi.responses import StreamingResponse
+from ultralytics.utils.plotting import Annotator, colors
+from PIL import Image
 import numpy as np
+import pandas as pd
 import cv2
+import io
+import os
 import time
+
+from prometheus_client import start_http_server, Gauge, Counter, Histogram
+
+time_gauge = Gauge('response_time', 'Average response time of the PyTorch model')
+request_number = Counter('request_number', 'The number of predict requests')
+confidence_distribution = Histogram('confidence_distribution', 'Confidence distribution of predictions.', buckets=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+accuracy = Gauge('prediction_accuracy', 'Accuracy on Labeled Data')
+
+label_path = './data/train/labels/'
+
+start_http_server(8000)
 
 app = FastAPI(
     title="YOLO11 Deployment API",
@@ -29,6 +46,10 @@ start_time = time.time()
 
 # Variables for simple metrics tracking
 request_count = 0
+total_images = 0
+total_labeled_images = 0
+correct_predictions = 0
+
 total_latency = 0.0
 max_latency = 0.0
 request_timestamps = []  # list to track request times for request rate calculation
@@ -49,9 +70,52 @@ def process_image(image_bytes: bytes) -> np.ndarray:
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     return img
 
+def add_bboxs_on_img(image: Image, predict) -> Image:
+    
+    annotator = Annotator(np.array(image))
+
+    # sort predict by xmin value
+    predict = predict.sort_values(by=['xmin'], ascending=True)
+
+    # iterate over the rows of predict dataframe
+    for i, row in predict.iterrows():
+        # create the text to be displayed on image
+        text = f"{row['name']}: {int(row['confidence']*100)}%"
+        # get the bounding box coordinates
+        bbox = [row['xmin'], row['ymin'], row['xmax'], row['ymax']]
+        # add the bounding box and text on the image
+        annotator.box_label(bbox, text, color=colors(row['class'], True))
+    # convert the annotated image to PIL image
+    return Image.fromarray(annotator.result())
+
+def get_bytes_from_image(image: Image) -> bytes:
+    return_image = io.BytesIO()
+    image.save(return_image, format='JPEG', quality=85)  # save the image in JPEG format with quality 85
+    return_image.seek(0)  # set the pointer to the beginning of the file
+    return return_image
+
+def transform_predict_to_df(results: list, labeles_dict: dict) -> pd.DataFrame:
+    
+    # Transform the Tensor to numpy array
+    predict_bbox = pd.DataFrame(results[0].to("cpu").numpy().boxes.xyxy, columns=['xmin', 'ymin', 'xmax','ymax'])
+    # Add the confidence of the prediction to the DataFrame
+    predict_bbox['confidence'] = results[0].to("cpu").numpy().boxes.conf
+    # Add the class of the prediction to the DataFrame
+    predict_bbox['class'] = (results[0].to("cpu").numpy().boxes.cls).astype(int)
+    # Replace the class number with the class name from the labeles_dict
+    predict_bbox['name'] = predict_bbox["class"].replace(labeles_dict)
+    return predict_bbox
+
 # -------------------------
 # 3. API Endpoints
 # -------------------------
+
+# Welcome Endpoint
+@app.get("/")
+def hello_world():
+    return {
+        "Hello World!"
+    }
 
 # Health Check Endpoint
 @app.get("/health-status")
@@ -116,7 +180,8 @@ def set_default_model(model: str):
 @app.post("/predict")
 def predict(image: UploadFile = File(...), model: str = Query(None, description="YOLO model name to use")):
     global request_count, total_latency, max_latency
-
+    global total_images, total_labeled_images, correct_predictions
+    
     start_request_time = time.time()
     request_timestamps.append(start_request_time)
     
@@ -139,13 +204,29 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
     predictions = []
     # Loop through results (for each image; typically one image per request)
     for r in results:
+        total_images += 1
+        gt_name = '.'.join(image.filename.split('.')[:-1])+'.txt'
+
+        if os.path.exists(label_path+gt_name):
+            gt = []
+            with open(label_path+gt_name) as f:
+                lines = f.readlines()
+                for line in lines:
+                    gt.append(line[0])
         # Each result contains a Boxes object
-        for box in r.boxes:
+        for i, box in enumerate(r.boxes):
             # Extract box coordinates in xyxy format, confidence, and class index
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             conf = float(box.conf[0])
             cls_id = int(box.cls[0])
             label = chosen_model.names[cls_id]
+            
+            if os.path.exists(label_path+gt_name) and (len(gt) > i):
+                total_labeled_images += 1
+                
+                if int(gt[i]) == 1 - cls_id:
+                    correct_predictions += 1
+            
             predictions.append({
                 "label": label,
                 "confidence": round(conf, 2),
@@ -158,10 +239,57 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
     if elapsed > max_latency:
         max_latency = elapsed
 
+    time_gauge.set(total_latency/total_images)
+    if total_labeled_images == 0:
+        accuracy.set(0)
+    else:
+        accuracy.set(correct_predictions/total_labeled_images)
+    request_number.inc()
+    if len(predictions) >= 1:
+        confidence_distribution.observe(predictions[0]["confidence"])
+
     return {
         "predictions": predictions,
         "model_used": chosen_model_name
     }
+    
+@app.post("/predict_visualization")
+def predict_visualization(image: UploadFile = File(...), model: str = Query(None, description="YOLO model name to use")):
+    """
+    Object Detection from an image plot bbox on image
+
+    Args:
+        file (bytes): The image file in bytes format.
+    Returns:
+        Image: Image in bytes with bbox annotations.
+    """
+    global request_count, total_latency, max_latency
+
+    start_request_time = time.time()
+    request_timestamps.append(start_request_time)
+    
+    # Choose model
+    if model and model in models:
+        chosen_model = models[model]
+        chosen_model_name = model
+    else:
+        chosen_model = models[default_model_name]
+        chosen_model_name = default_model_name
+
+    # Read image file from request
+    contents = image.file.read()
+    img = process_image(contents)
+    
+    # Run inference using Ultralytics YOLO11 predict mode
+    # Here, stream=False returns a list of Results objects
+    results = chosen_model.predict(img, conf=0.25, imgsz=640)
+    results = transform_predict_to_df(results, chosen_model.model.names)
+
+    # add bbox on image
+    final_image = add_bboxs_on_img(image = img, predict = results)
+
+    # return image in bytes format
+    return StreamingResponse(content=get_bytes_from_image(final_image), media_type="image/jpeg")
 
 # Metrics Endpoint
 @app.get("/metrics")
@@ -186,4 +314,4 @@ def get_metrics():
 # -------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
