@@ -18,7 +18,7 @@ request_number = Counter('request_number', 'The number of predict requests')
 confidence_distribution = Histogram('confidence_distribution', 'Confidence distribution of predictions.', buckets=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
 accuracy = Gauge('prediction_accuracy', 'Accuracy on Labeled Data')
 
-label_path = '/home/zhibo/Code/yolo11-api-zb/data/train/labels/'
+label_path = './data/train/labels/'
 
 start_http_server(8000)
 
@@ -314,4 +314,4 @@ def get_metrics():
 # -------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="129.97.250.130", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

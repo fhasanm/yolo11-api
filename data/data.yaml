@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['-', 'Tim Horton Cups - v8 2025-03-13 8-18pm']
+
+roboflow:
+  workspace: myworkspace-bka6l
+  project: random_project-guya9
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/myworkspace-bka6l/random_project-guya9/dataset/1

@@ -1,9 +1,9 @@
 import requests
 import glob
 
-paths = glob.glob("/home/zhibo/Code/yolo11-api-zb/data/train/images/*", recursive=True) # returns a list of file paths
+paths = glob.glob("./data/train/images/*", recursive=True) # returns a list of file paths
 images = [open(p, 'rb') for p in paths][:1000] # or paths[:3] to select the first 3 images
-url = 'http://129.97.250.130:8001/predict'
+url = 'http://0.0.0.0:8001/predict'
 model_name = 'model_0'
 
 for i in range(len(images)):
