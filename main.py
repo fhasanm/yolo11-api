@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from ultralytics import YOLO
 from fastapi.responses import StreamingResponse
 from ultralytics.utils.plotting import Annotator, colors
+from matplotlib import pyplot as plt
 from PIL import Image
 import numpy as np
 import pandas as pd
@@ -68,6 +69,7 @@ def process_image(image_bytes: bytes) -> np.ndarray:
     """Converts raw image bytes into a NumPy image (BGR) using OpenCV."""
     np_arr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    img[:, :, [0, 2]] = img[:, :, [2, 0]]
     return img
 
 def add_bboxs_on_img(image: Image, predict) -> Image:
@@ -278,6 +280,7 @@ def predict_visualization(image: UploadFile = File(...), model: str = Query(None
 
     # Read image file from request
     contents = image.file.read()
+
     img = process_image(contents)
     
     # Run inference using Ultralytics YOLO11 predict mode
