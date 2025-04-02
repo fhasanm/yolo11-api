@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Query
+from fastapi import FastAPI, File, UploadFile, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
 from ultralytics import YOLO
 from fastapi.responses import StreamingResponse
@@ -10,6 +10,12 @@ import cv2
 import io
 import os
 import time
+import pandas as pd
+import os
+from evidently.report import Report
+from evidently.metric_preset import DataDriftPreset
+import webbrowser
+
 
 from prometheus_client import start_http_server, Gauge, Counter, Histogram
 
@@ -54,6 +60,9 @@ total_latency = 0.0
 max_latency = 0.0
 request_timestamps = []  # list to track request times for request rate calculation
 
+# Evidently AI
+prod_pred_path = "output/production_predictions.csv"
+
 # -------------------------
 # 2. Helper Functions
 # -------------------------
@@ -71,7 +80,7 @@ def process_image(image_bytes: bytes) -> np.ndarray:
     return img
 
 def add_bboxs_on_img(image: Image, predict) -> Image:
-    
+
     annotator = Annotator(np.array(image))
 
     # sort predict by xmin value
@@ -95,7 +104,7 @@ def get_bytes_from_image(image: Image) -> bytes:
     return return_image
 
 def transform_predict_to_df(results: list, labeles_dict: dict) -> pd.DataFrame:
-    
+
     # Transform the Tensor to numpy array
     predict_bbox = pd.DataFrame(results[0].to("cpu").numpy().boxes.xyxy, columns=['xmin', 'ymin', 'xmax','ymax'])
     # Add the confidence of the prediction to the DataFrame
@@ -176,15 +185,31 @@ def set_default_model(model: str):
         "default_model": default_model_name
     }
 
+# Function to log predictions in the background
+def log_predictions_bg(timestamp: float, model_name: str, predictions: list):
+    # Create a DataFrame for each detection
+    df = pd.DataFrame(
+        [
+            {"timestamp": timestamp, "model_name": model_name, "class": pred["label"], "confidence": pred["confidence"]}
+            for pred in predictions
+        ]
+    )
+
+    df.to_csv(prod_pred_path, mode="a", header=not os.path.exists(prod_pred_path), index=False)
+
 # Inference Endpoint (/predict)
 @app.post("/predict")
-def predict(image: UploadFile = File(...), model: str = Query(None, description="YOLO model name to use")):
+def predict(
+    background_tasks: BackgroundTasks,
+    image: UploadFile = File(...),
+    model: str = Query(None, description="YOLO model name to use")
+):
     global request_count, total_latency, max_latency
     global total_images, total_labeled_images, correct_predictions
-    
+
     start_request_time = time.time()
     request_timestamps.append(start_request_time)
-    
+
     # Choose model
     if model and model in models:
         chosen_model = models[model]
@@ -196,11 +221,11 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
     # Read image file from request
     contents = image.file.read()
     img = process_image(contents)
-    
+
     # Run inference using Ultralytics YOLO11 predict mode
     # Here, stream=False returns a list of Results objects
     results = chosen_model.predict(img, conf=0.25, imgsz=640)
-    
+
     predictions = []
     # Loop through results (for each image; typically one image per request)
     for r in results:
@@ -220,18 +245,21 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
             conf = float(box.conf[0])
             cls_id = int(box.cls[0])
             label = chosen_model.names[cls_id]
-            
+
             if os.path.exists(label_path+gt_name) and (len(gt) > i):
                 total_labeled_images += 1
-                
+
                 if int(gt[i]) == 1 - cls_id:
                     correct_predictions += 1
-            
+
             predictions.append({
                 "label": label,
                 "confidence": round(conf, 2),
                 "bbox": [x1, y1, x2, y2]
             })
+
+    # Log predictions asynchronously
+    background_tasks.add_task(log_predictions_bg, time.time(), chosen_model_name, predictions)
 
     elapsed = time.time() - start_request_time
     request_count += 1
@@ -252,7 +280,7 @@ def predict(image: UploadFile = File(...), model: str = Query(None, description=
         "predictions": predictions,
         "model_used": chosen_model_name
     }
-    
+
 @app.post("/predict_visualization")
 def predict_visualization(image: UploadFile = File(...), model: str = Query(None, description="YOLO model name to use")):
     """
@@ -267,7 +295,7 @@ def predict_visualization(image: UploadFile = File(...), model: str = Query(None
 
     start_request_time = time.time()
     request_timestamps.append(start_request_time)
-    
+
     # Choose model
     if model and model in models:
         chosen_model = models[model]
@@ -279,7 +307,7 @@ def predict_visualization(image: UploadFile = File(...), model: str = Query(None
     # Read image file from request
     contents = image.file.read()
     img = process_image(contents)
-    
+
     # Run inference using Ultralytics YOLO11 predict mode
     # Here, stream=False returns a list of Results objects
     results = chosen_model.predict(img, conf=0.25, imgsz=640)
@@ -308,6 +336,39 @@ def get_metrics():
         "max_latency_ms": round(max_latency_ms, 2),
         "total_requests": request_count
     }
+
+@app.get("/monitoring/drift")
+def generate_drift_report():
+    # Load reference and production data
+    try:
+        ref_df = pd.read_csv("data/reference_predictions_0.csv")
+        current_df = pd.read_csv("output/production_predictions_0.csv")
+    except FileNotFoundError:
+        return JSONResponse(status_code=404, content={"error": "Prediction files not found."})
+
+    # Filter for a specific model (e.g., model_0)
+    ref_df = ref_df[ref_df["model_name"] == "model_0"]
+    current_df = current_df[current_df["model_name"] == "model_0"]
+
+    # Filter production data for the last 7 days
+    seven_days_ago = time.time() - 7 * 86400  # 7 days in seconds
+    current_df = current_df[current_df["timestamp"] >= seven_days_ago]
+
+    # Check if there's enough data
+    if current_df.empty:
+        return JSONResponse(status_code=400, content={"error": "No recent predictions available."})
+
+    # Generate Evidently AI report
+    report = Report(metrics=[DataDriftPreset(columns=["class", "confidence"])])
+    report.run(reference_data=ref_df, current_data=current_df)
+
+    # Save the report as HTML
+    report_path = "output/drift_report.html"
+    report.save_html(report_path)
+
+    webbrowser.open("file://" + os.path.abspath(report_path))
+
+    return JSONResponse(status_code=200, content={"message": "Drift report generated and opened in browser."})
 
 # -------------------------
 # 4. Run the Application
