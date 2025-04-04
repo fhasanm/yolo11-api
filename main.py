@@ -65,6 +65,7 @@ request_timestamps = []  # list to track request times for request rate calculat
 ref_pred_folder = "data"
 prod_pred_folder = "output"
 evidently_report_path = "output/drift_report.html"
+dft_report_days = 7
 
 def get_ref_prod_pred_path(model_name: str, mode: str) -> str:
     """Get the path for reference or production predictions based on the model name."""
@@ -365,6 +366,7 @@ def get_metrics():
 @app.post("/monitoring/drift")
 def generate_drift_report(
     model: str = Query(None, description="YOLO model name to use"),
+    days: int = Query(7, description="Number of days to consider for production data"),
 ):
 
     model_name = model if (model and model in models) else default_model_name
@@ -376,9 +378,10 @@ def generate_drift_report(
     except FileNotFoundError:
         return JSONResponse(status_code=404, content={"error": "Prediction files not found."})
 
-    # Filter production data for the last 7 days
-    seven_days_ago = time.time() - 7 * 86400  # 7 days in seconds
-    current_df = current_df[current_df["timestamp"] >= seven_days_ago]
+    # Filter production data for the specified number of days
+    days = days if (days and days > 0) else dft_report_days
+    days_ago = time.time() - days * 86400  # days in seconds
+    current_df = current_df[current_df["timestamp"] >= days_ago]
 
     # Check if there's enough data
     if current_df.empty:
