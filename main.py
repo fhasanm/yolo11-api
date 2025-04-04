@@ -62,7 +62,21 @@ max_latency = 0.0
 request_timestamps = []  # list to track request times for request rate calculation
 
 # Evidently AI
+ref_pred_folder = "data"
+prod_pred_folder = "output"
 evidently_report_path = "output/drift_report.html"
+
+def get_ref_prod_pred_path(model_name: str, mode: str) -> str:
+    """Get the path for reference or production predictions based on the model name."""
+    model_id = model_name.split("_")[-1]
+
+    folder = ref_pred_folder if mode == "ref" else prod_pred_folder
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    file = f"{mode}_pred_{model_id}.csv"
+
+    return os.path.join(folder, file)
 
 # -------------------------
 # 2. Helper Functions
@@ -188,7 +202,9 @@ def set_default_model(model: str):
     }
 
 # Function to log predictions in the background
-def log_predictions_bg(timestamp: float, model_name: str, predictions: list):
+def log_predictions_bg(
+    timestamp: float, model_name: str, predictions: list, prod_pred_path: str
+):
     # Create a DataFrame for each detection
     df = pd.DataFrame(
         [
@@ -261,7 +277,13 @@ def predict(
             })
 
     # Log predictions asynchronously
-    background_tasks.add_task(log_predictions_bg, time.time(), chosen_model_name, predictions)
+    background_tasks.add_task(
+        log_predictions_bg,
+        time.time(),
+        chosen_model_name,
+        predictions,
+        get_ref_prod_pred_path(chosen_model_name, "prod"),
+    )
 
     elapsed = time.time() - start_request_time
     request_count += 1
@@ -340,18 +362,19 @@ def get_metrics():
         "total_requests": request_count
     }
 
-@app.get("/monitoring/drift")
-def generate_drift_report():
+@app.post("/monitoring/drift")
+def generate_drift_report(
+    model: str = Query(None, description="YOLO model name to use"),
+):
+
+    model_name = model if (model and model in models) else default_model_name
+
     # Load reference and production data
     try:
-        ref_df = pd.read_csv("data/reference_predictions_0.csv")
-        current_df = pd.read_csv("output/production_predictions_0.csv")
+        ref_df = pd.read_csv(get_ref_prod_pred_path(model_name, "ref"))
+        current_df = pd.read_csv(get_ref_prod_pred_path(model_name, "prod"))
     except FileNotFoundError:
         return JSONResponse(status_code=404, content={"error": "Prediction files not found."})
-
-    # Filter for a specific model (e.g., model_0)
-    ref_df = ref_df[ref_df["model_name"] == "model_0"]
-    current_df = current_df[current_df["model_name"] == "model_0"]
 
     # Filter production data for the last 7 days
     seven_days_ago = time.time() - 7 * 86400  # 7 days in seconds
