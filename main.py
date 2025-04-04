@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Query, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from ultralytics import YOLO
 from fastapi.responses import StreamingResponse
 from ultralytics.utils.plotting import Annotator, colors
@@ -417,7 +417,7 @@ def generate_drift_report(
 
     webbrowser.open("file://" + os.path.abspath(evidently_report_path))
 
-    return JSONResponse(status_code=200, content={"message": "Drift report generated and opened in browser."})
+    return FileResponse(evidently_report_path)
 
 # -------------------------
 # 4. Run the Application
