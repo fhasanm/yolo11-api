@@ -397,12 +397,19 @@ def generate_drift_report(
     days_ago = time.time() - days * 86400  # days in seconds
     current_df = current_df[current_df["timestamp"] >= days_ago]
 
+    # Add number of detections per image
+    ref_num_detections = ref_df.groupby("request_id").size().to_frame("num_detections")
+    ref_df = ref_df.merge(ref_num_detections, on="request_id", how="left")
+
+    current_num_detections = current_df.groupby("request_id").size().to_frame("num_detections")
+    current_df = current_df.merge(current_num_detections, on="request_id", how="left")
+
     # Check if there's enough data
     if current_df.empty:
         return JSONResponse(status_code=400, content={"error": "No recent predictions available."})
 
     # Generate Evidently AI report
-    report = Report(metrics=[DataDriftPreset(columns=["class", "confidence", "area"])])
+    report = Report(metrics=[DataDriftPreset(columns=["class", "confidence", "area", "num_detections"])])
     report.run(reference_data=ref_df, current_data=current_df)
 
     # Save the report as HTML
