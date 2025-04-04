@@ -4,6 +4,7 @@ import cv2
 import os
 import time
 import uuid
+from tqdm import tqdm
 
 # Load the model (e.g., model_0)
 model = YOLO("./models/best.pt")
@@ -17,7 +18,7 @@ csv_content = []
 timestamp = time.time()  # Use a fixed timestamp
 
 # iterate all images under reference_folder
-for filename in os.listdir(reference_folder):
+for filename in tqdm(os.listdir(reference_folder), desc="Processing images"):
     # not png or jpg
     if not filename.endswith(('.png', '.jpg', '.jpeg')):
         continue
