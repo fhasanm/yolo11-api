@@ -62,7 +62,7 @@ max_latency = 0.0
 request_timestamps = []  # list to track request times for request rate calculation
 
 # Evidently AI
-prod_pred_path = "output/production_predictions.csv"
+evidently_report_path = "output/drift_report.html"
 
 # -------------------------
 # 2. Helper Functions
@@ -366,10 +366,9 @@ def generate_drift_report():
     report.run(reference_data=ref_df, current_data=current_df)
 
     # Save the report as HTML
-    report_path = "output/drift_report.html"
-    report.save_html(report_path)
+    report.save_html(evidently_report_path)
 
-    webbrowser.open("file://" + os.path.abspath(report_path))
+    webbrowser.open("file://" + os.path.abspath(evidently_report_path))
 
     return JSONResponse(status_code=200, content={"message": "Drift report generated and opened in browser."})
 
