@@ -16,6 +16,7 @@ import os
 from evidently.report import Report
 from evidently.metric_preset import DataDriftPreset
 import webbrowser
+import uuid
 
 
 from prometheus_client import start_http_server, Gauge, Counter, Histogram
@@ -204,13 +205,20 @@ def set_default_model(model: str):
 
 # Function to log predictions in the background
 def log_predictions_bg(
-    timestamp: float, model_name: str, predictions: list, prod_pred_path: str
+    request_id: str, timestamp: float, model_name: str, predictions: list, areas: list, prod_pred_path: str
 ):
     # Create a DataFrame for each detection
     df = pd.DataFrame(
         [
-            {"timestamp": timestamp, "model_name": model_name, "class": pred["label"], "confidence": pred["confidence"]}
-            for pred in predictions
+            {
+                "request_id": request_id,
+                "timestamp": timestamp,
+                "model_name": model_name,
+                "class": pred["label"],
+                "confidence": pred["confidence"],
+                "area": area,
+            }
+            for pred, area in zip(predictions, areas)
         ]
     )
 
@@ -226,6 +234,7 @@ def predict(
     global request_count, total_latency, max_latency
     global total_images, total_labeled_images, correct_predictions
 
+    request_id = str(uuid.uuid4())
     start_request_time = time.time()
     request_timestamps.append(start_request_time)
 
@@ -246,6 +255,7 @@ def predict(
     results = chosen_model.predict(img, conf=0.25, imgsz=640)
 
     predictions = []
+    areas = []
     # Loop through results (for each image; typically one image per request)
     for r in results:
         total_images += 1
@@ -277,12 +287,16 @@ def predict(
                 "bbox": [x1, y1, x2, y2]
             })
 
+            areas.append((x2 - x1) * (y2 - y1))
+
     # Log predictions asynchronously
     background_tasks.add_task(
         log_predictions_bg,
-        time.time(),
+        request_id,
+        start_request_time,
         chosen_model_name,
         predictions,
+        areas,
         get_ref_prod_pred_path(chosen_model_name, "prod"),
     )
 
@@ -388,7 +402,7 @@ def generate_drift_report(
         return JSONResponse(status_code=400, content={"error": "No recent predictions available."})
 
     # Generate Evidently AI report
-    report = Report(metrics=[DataDriftPreset(columns=["class", "confidence"])])
+    report = Report(metrics=[DataDriftPreset(columns=["class", "confidence", "area"])])
     report.run(reference_data=ref_df, current_data=current_df)
 
     # Save the report as HTML
