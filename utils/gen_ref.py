@@ -10,7 +10,7 @@ model = YOLO("./models/best.pt")
 model_name = "model_0"
 
 # List of reference image paths
-reference_folder = "data/ref_best/images"
+reference_folder = "./output/ref_best/images"
 
 csv_content = []
 
@@ -50,4 +50,4 @@ for filename in os.listdir(reference_folder):
 
 # Save to reference_predictions.csv
 df = pd.DataFrame(csv_content)
-df.to_csv("ref_pred_0.csv", index=False)
+df.to_csv("./data/ref_pred_0.csv", index=False)
