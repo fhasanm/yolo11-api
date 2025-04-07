@@ -274,6 +274,7 @@ def predict(
             conf = float(box.conf[0])
             cls_id = int(box.cls[0])
             label = chosen_model.names[cls_id]
+            label = "timmies" if label == "timmies-cup" else label
 
             if os.path.exists(label_path+gt_name) and (len(gt) > i):
                 total_labeled_images += 1
