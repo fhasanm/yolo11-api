@@ -34,6 +34,7 @@ for filename in tqdm(os.listdir(reference_folder), desc="Processing images"):
             conf = float(box.conf[0])
             cls_id = int(box.cls[0])
             label = model.names[cls_id]
+            label = "timmies" if label == "timmies-cup" else label
 
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             area = (x2 - x1) * (y2 - y1)
