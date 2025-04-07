@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Query, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from ultralytics import YOLO
 from fastapi.responses import StreamingResponse
 from ultralytics.utils.plotting import Annotator, colors
@@ -16,6 +16,7 @@ import os
 from evidently.report import Report
 from evidently.metric_preset import DataDriftPreset
 import webbrowser
+import uuid
 
 
 from prometheus_client import start_http_server, Gauge, Counter, Histogram
@@ -62,7 +63,22 @@ max_latency = 0.0
 request_timestamps = []  # list to track request times for request rate calculation
 
 # Evidently AI
-prod_pred_path = "output/production_predictions.csv"
+ref_pred_folder = "data"
+prod_pred_folder = "output"
+evidently_report_path = "output/drift_report.html"
+dft_report_days = 7
+
+def get_ref_prod_pred_path(model_name: str, mode: str) -> str:
+    """Get the path for reference or production predictions based on the model name."""
+    model_id = model_name.split("_")[-1]
+
+    folder = ref_pred_folder if mode == "ref" else prod_pred_folder
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    file = f"{mode}_pred_{model_id}.csv"
+
+    return os.path.join(folder, file)
 
 # -------------------------
 # 2. Helper Functions
@@ -188,12 +204,21 @@ def set_default_model(model: str):
     }
 
 # Function to log predictions in the background
-def log_predictions_bg(timestamp: float, model_name: str, predictions: list):
+def log_predictions_bg(
+    request_id: str, timestamp: float, model_name: str, predictions: list, areas: list, prod_pred_path: str
+):
     # Create a DataFrame for each detection
     df = pd.DataFrame(
         [
-            {"timestamp": timestamp, "model_name": model_name, "class": pred["label"], "confidence": pred["confidence"]}
-            for pred in predictions
+            {
+                "request_id": request_id,
+                "timestamp": timestamp,
+                "model_name": model_name,
+                "class": pred["label"],
+                "confidence": pred["confidence"],
+                "area": area,
+            }
+            for pred, area in zip(predictions, areas)
         ]
     )
 
@@ -209,6 +234,7 @@ def predict(
     global request_count, total_latency, max_latency
     global total_images, total_labeled_images, correct_predictions
 
+    request_id = str(uuid.uuid4())
     start_request_time = time.time()
     request_timestamps.append(start_request_time)
 
@@ -229,6 +255,7 @@ def predict(
     results = chosen_model.predict(img, conf=0.25, imgsz=640)
 
     predictions = []
+    areas = []
     # Loop through results (for each image; typically one image per request)
     for r in results:
         total_images += 1
@@ -260,8 +287,18 @@ def predict(
                 "bbox": [x1, y1, x2, y2]
             })
 
+            areas.append((x2 - x1) * (y2 - y1))
+
     # Log predictions asynchronously
-    background_tasks.add_task(log_predictions_bg, time.time(), chosen_model_name, predictions)
+    background_tasks.add_task(
+        log_predictions_bg,
+        request_id,
+        start_request_time,
+        chosen_model_name,
+        predictions,
+        areas,
+        get_ref_prod_pred_path(chosen_model_name, "prod"),
+    )
 
     elapsed = time.time() - start_request_time
     request_count += 1
@@ -340,38 +377,47 @@ def get_metrics():
         "total_requests": request_count
     }
 
-@app.get("/monitoring/drift")
-def generate_drift_report():
+@app.post("/monitoring/drift")
+def generate_drift_report(
+    model: str = Query(None, description="YOLO model name to use"),
+    days: int = Query(7, description="Number of days to consider for production data"),
+):
+
+    model_name = model if (model and model in models) else default_model_name
+
     # Load reference and production data
     try:
-        ref_df = pd.read_csv("data/reference_predictions_0.csv")
-        current_df = pd.read_csv("output/production_predictions_0.csv")
+        ref_df = pd.read_csv(get_ref_prod_pred_path(model_name, "ref"))
+        current_df = pd.read_csv(get_ref_prod_pred_path(model_name, "prod"))
     except FileNotFoundError:
         return JSONResponse(status_code=404, content={"error": "Prediction files not found."})
 
-    # Filter for a specific model (e.g., model_0)
-    ref_df = ref_df[ref_df["model_name"] == "model_0"]
-    current_df = current_df[current_df["model_name"] == "model_0"]
+    # Filter production data for the specified number of days
+    days = days if (days and days > 0) else dft_report_days
+    days_ago = time.time() - days * 86400  # days in seconds
+    current_df = current_df[current_df["timestamp"] >= days_ago]
 
-    # Filter production data for the last 7 days
-    seven_days_ago = time.time() - 7 * 86400  # 7 days in seconds
-    current_df = current_df[current_df["timestamp"] >= seven_days_ago]
+    # Add number of detections per image
+    ref_num_detections = ref_df.groupby("request_id").size().to_frame("num_detections")
+    ref_df = ref_df.merge(ref_num_detections, on="request_id", how="left")
+
+    current_num_detections = current_df.groupby("request_id").size().to_frame("num_detections")
+    current_df = current_df.merge(current_num_detections, on="request_id", how="left")
 
     # Check if there's enough data
     if current_df.empty:
         return JSONResponse(status_code=400, content={"error": "No recent predictions available."})
 
     # Generate Evidently AI report
-    report = Report(metrics=[DataDriftPreset(columns=["class", "confidence"])])
+    report = Report(metrics=[DataDriftPreset(columns=["class", "confidence", "area", "num_detections"])])
     report.run(reference_data=ref_df, current_data=current_df)
 
     # Save the report as HTML
-    report_path = "output/drift_report.html"
-    report.save_html(report_path)
+    report.save_html(evidently_report_path)
 
-    webbrowser.open("file://" + os.path.abspath(report_path))
+    webbrowser.open("file://" + os.path.abspath(evidently_report_path))
 
-    return JSONResponse(status_code=200, content={"message": "Drift report generated and opened in browser."})
+    return FileResponse(evidently_report_path)
 
 # -------------------------
 # 4. Run the Application
